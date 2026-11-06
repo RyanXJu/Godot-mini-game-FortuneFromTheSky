@@ -1,0 +1,1 @@
+This is a mini project to explore game developing with Godot
