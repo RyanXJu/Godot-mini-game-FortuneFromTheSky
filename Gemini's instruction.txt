@@ -1,0 +1,145 @@
+Salut ! Voici une fiche d'implémentation technique conçue pour un développeur junior sur Godot 4 (en GDScript). Elle est structurée par scène, détection de collisions et logique d'état pour éviter les ambiguïtés d'architecture.
+
+---
+
+## 📄 Fiche de Spécification Technique : Silk Road Catcher (Godot 4)
+
+### 1. Architecture des Scènes (Scene Tree)
+
+#### A. Scène Joueur (`Player.tscn` - `Area2D` ou `CharacterBody2D`)
+
+* **Structure des nœuds :**
+* `Player` (`CharacterBody2D` pour le déplacement horizontal/vertical)
+* `Sprite2D` (Visuel du marchand)
+* `BodyCollider` (`CollisionShape2D` - Masque le corps principal)
+* `HandBasket` (`Area2D` - Panier plat à la main, devant/côté)
+* `CollisionShape2D`
+
+
+* `BackBasket` (`Area2D` - Panier sur le dos)
+* `CollisionShape2D`
+
+
+
+
+
+
+
+#### B. Scènes des Objets Tombants
+
+* `ItemBase.tscn` (`Area2D`) : Classe parente avec vitesse de chute réglable et logique d'élimination à la sortie de l'écran.
+* `Saffron.tscn` (Hérite de `ItemBase`)
+* `TurquoiseOre.tscn` (Hérite de `ItemBase`)
+
+
+
+#### C. Gestionnaire de Jeu (`Main.tscn`)
+
+* `Background` (`TextureRect` ou `ParallaxBackground` : Désert et Oasis)
+* `Spawner` (`Node2D` avec un `Timer` pour générer `Saffron` / `TurquoiseOre` à des coordonnées X aléatoires)
+* `UIManager` (`CanvasLayer` pour l'affichage de l'interface)
+
+---
+
+### 2. Matrice des Collisions (Layers & Masks)
+
+Configure les calques dans **Project Settings > Physics 2D** pour isoler la détection :
+
+* **Layer 1 :** Player Body
+* **Layer 2 :** Hand Basket (Panier plat)
+* **Layer 3 :** Back Basket (Panier dos)
+* **Layer 4 :** Items (Saffrons & Turquoise)
+
+> **Note d'implémentation :** Chaque zone d'objet (`Area2D`) émet un signal `area_entered` ou `body_entered` lorsqu'elle entre en contact avec l'une des trois zones de réception du joueur.
+
+---
+
+### 3. Matrice de Logique d'Impact
+
+Voici la table explicite à coder lors de la détection de collision :
+
+| Type d'Objet | Zone d'Impact | Action Joueur / UI | Effet de l'Objet |
+| --- | --- | --- | --- |
+| **Minerai de Turquoise** | `BodyCollider` | Santé `-1` (Pas de modification des totaux) | `queue_free()` |
+| **Minerai de Turquoise** | `HandBasket` | Safran `-3` (Borner le total à `max(0, saffron - 3)`) | `queue_free()` |
+| **Minerai de Turquoise** | `BackBasket` | Turquoise `+1` | `queue_free()` |
+| **Fleur de Safran** | `HandBasket` | Safran `+1` | `queue_free()` |
+| **Fleur de Safran** | `BodyCollider` | Aucun changement | `queue_free()` |
+| **Fleur de Safran** | `BackBasket` | Aucun changement | `queue_free()` |
+
+---
+
+### 4. Logique GDScript (Extrait de référence)
+
+#### Gestion de la Santé et des Totaux (`Global.gd` ou `Main.gd`)
+
+```gdscript
+extends Node
+
+var saffron_count : int = 0:
+	set(value):
+		saffron_count = max(0, value)
+		SignalBus.saffron_updated.emit(saffron_count)
+
+var turquoise_count : int = 0:
+	set(value):
+		turquoise_count = max(0, value)
+		SignalBus.turquoise_updated.emit(turquoise_count)
+
+var health : int = 10:
+	set(value):
+		health = max(0, value)
+		SignalBus.health_updated.emit(health)
+		if health == 0:
+			end_game("PV épuisés")
+
+```
+
+#### Traitement de la collision côté Objet (`ItemBase.gd`)
+
+```gdscript
+enum ItemType { SAFFRON, TURQUOISE }
+@export var type : ItemType = ItemType.SAFFRON
+
+func _on_area_entered(area: Area2D) -> void:
+	if area.is_in_group("hand_basket"):
+		if type == ItemType.SAFFRON:
+			Global.saffron_count += 1
+		elif type == ItemType.TURQUOISE:
+			Global.saffron_count -= 3
+		queue_free()
+		
+	elif area.is_in_group("back_basket"):
+		if type == ItemType.TURQUOISE:
+			Global.turquoise_count += 1
+		# Si Safran sur back_basket : rien ne se passe
+		queue_free()
+
+func _on_body_entered(body: Node2D) -> void:
+	if body.is_in_group("player_body"):
+		if type == ItemType.TURQUOISE:
+			Global.health -= 1
+		# Si Safran sur body : aucun changement
+		queue_free()
+
+```
+
+---
+
+### 5. Interface Utilisateur & Conditions de Fin (`UI.tscn`)
+
+L'interface embarque 4 composants sous un `MarginContainer` :
+
+1. **Label Safran :** Affichage dynamique du total de safran (`"Safran : " + str(saffron_count)`).
+2. **Label Turquoise :** Affichage dynamique de la turquoise (`"Turquoise : " + str(turquoise_count)`).
+3. **Barre / Label Santé :** Valeur initiale à `10`.
+4. **Timer d'Épreuve (`Timer`) :**
+* Durée : `30.0` secondes (`one_shot = true`, `autostart = true`).
+* Signal `timeout` relié à la fonction `end_game("Temps écoulé")`.
+
+
+
+#### Conditions d'arrêt du jeu (Game Over) :
+
+* `Global.health <= 0` **OU** `Timer.is_stopped()` atteint 0 s.
+* À l'arrêt : Bloquer le traitement du joueur (`set_physics_process(false)`), arrêter le `Spawner` et afficher le menu de fin.
